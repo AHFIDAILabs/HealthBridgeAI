@@ -1,0 +1,178 @@
+# ─── Disease Registry ──────────────────────────────────────────────────────────
+# Adding a new disease = add an entry here + upload KB to GCS.
+# No Python code changes required.
+# Run scripts/evaluate_kb.py before setting enabled: true in production.
+
+diseases:
+
+  tb:
+    name: "Tuberculosis"
+    short_name: "TB"
+    enabled: true
+
+    # Pinecone namespace for this disease's KB
+    pinecone_namespace: "tb"
+
+    # GCS path to the KB zip (relative to GCS_BUCKET_NAME)
+    kb_gcs_path: "knowledge-bases/tb/TB_knowledge_base.zip"
+
+    # Hint for semantic chunker — target tokens per chunk
+    chunk_size_hint: 400
+
+    # Minimum Pinecone score after re-ranking (overrides global default)
+    min_retrieval_score: 0.6
+
+    # Trusted domains for Tavily web search fallback — no random internet
+    search_domains:
+      - "who.int"
+      - "cdc.gov"
+      - "stoptb.org"
+      - "tbfacts.org"
+      - "nhs.uk"
+      - "mayoclinic.org"
+      - "iuatld.org"
+      - "ncdc.gov.ng"
+
+    # Alias keywords — fast path for disease routing (no LLM call needed)
+    aliases:
+      - "tb"
+      - "tuberculosis"
+      - "tuberculous"
+      - "rifampicin"
+      - "rifampin"
+      - "isoniazid"
+      - "pyrazinamide"
+      - "ethambutol"
+      - "mdr-tb"
+      - "xdr-tb"
+      - "dot"
+      - "directly observed therapy"
+      - "pulmonary"
+      - "sputum"
+      - "bacillus"
+      - "mycobacterium"
+
+    # Keywords that indicate a medical emergency for this disease
+    emergency_keywords:
+      - "coughing blood"
+      - "hemoptysis"
+      - "difficulty breathing"
+      - "chest pain severe"
+      - "unconscious"
+      - "cannot breathe"
+
+    # Appended to every LLM system prompt for this disease
+    system_prompt_extra: |
+      Always emphasise treatment adherence — stopping TB medication early causes
+      drug-resistant TB (MDR-TB), which is much harder to treat. If the user
+      mentions they are HIV-positive, note that TB/HIV co-infection requires
+      specialist management and refer them to a healthcare provider.
+
+  hiv:
+    name: "HIV / AIDS"
+    short_name: "HIV"
+    enabled: false   # Enable after KB is uploaded and RAGAS passes
+
+    pinecone_namespace: "hiv"
+    kb_gcs_path: "knowledge-bases/hiv/HIV_knowledge_base.zip"
+    chunk_size_hint: 400
+    min_retrieval_score: 0.6
+
+    search_domains:
+      - "who.int"
+      - "unaids.org"
+      - "aidsinfo.nih.gov"
+      - "cdc.gov"
+      - "aidsmap.com"
+      - "hiv.gov"
+      - "nhs.uk"
+      - "ncdc.gov.ng"
+
+    aliases:
+      - "hiv"
+      - "aids"
+      - "antiretroviral"
+      - "art"
+      - "arvs"
+      - "arv"
+      - "cd4"
+      - "viral load"
+      - "tenofovir"
+      - "efavirenz"
+      - "lopinavir"
+      - "dolutegravir"
+      - "pmtct"
+      - "prep"
+      - "pep"
+      - "opportunistic infection"
+      - "retrovirus"
+      - "seropositive"
+
+    emergency_keywords:
+      - "cannot breathe"
+      - "unconscious"
+      - "severe chest pain"
+      - "coughing blood"
+      - "convulsion"
+      - "seizure"
+
+    system_prompt_extra: |
+      HIV information must be accurate, non-stigmatising, and compassionate.
+      Always distinguish between HIV (the virus) and AIDS (the advanced stage).
+      Emphasise that people on effective ART can live long, healthy lives.
+      For drug interaction questions involving ART, always recommend confirming
+      with a pharmacist or HIV specialist — interactions can be life-threatening.
+
+  malaria:
+    name: "Malaria"
+    short_name: "Malaria"
+    enabled: false   # Enable after KB is uploaded and RAGAS passes
+
+    pinecone_namespace: "malaria"
+    kb_gcs_path: "knowledge-bases/malaria/Malaria_knowledge_base.zip"
+    chunk_size_hint: 350
+    min_retrieval_score: 0.6
+
+    search_domains:
+      - "who.int"
+      - "cdc.gov"
+      - "rollbackmalaria.org"
+      - "malariaconsortium.org"
+      - "nmcp.gov.ng"
+      - "nicd.ac.za"
+      - "nhs.uk"
+
+    aliases:
+      - "malaria"
+      - "plasmodium"
+      - "mosquito"
+      - "anopheles"
+      - "artemisinin"
+      - "act"
+      - "artesunate"
+      - "chloroquine"
+      - "lumefantrine"
+      - "rdt"
+      - "rapid diagnostic test"
+      - "fever chills"
+      - "cerebral malaria"
+      - "severe malaria"
+      - "bed net"
+      - "insecticide"
+
+    emergency_keywords:
+      - "cerebral malaria"
+      - "convulsion"
+      - "seizure"
+      - "unconscious"
+      - "cannot wake"
+      - "difficulty breathing"
+      - "severe anaemia"
+      - "jaundice severe"
+
+    system_prompt_extra: |
+      For malaria, emphasise seeking rapid diagnosis (RDT or blood smear) before
+      starting treatment — other fevers can mimic malaria. In Nigeria, recommend
+      testing at a government health facility. For severe malaria symptoms
+      (confusion, high fever, seizures), direct the user to the nearest emergency
+      facility immediately.

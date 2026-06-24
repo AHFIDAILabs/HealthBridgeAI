@@ -1,0 +1,1 @@
+﻿# IResponseCache  [Phase 1]
