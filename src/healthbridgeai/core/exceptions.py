@@ -1,132 +1,67 @@
-# modules/exceptions.py: Custom exceptions for better error handling
-"""
-Custom exception classes for Lighthouse HealthConnect.
-Provides specific exception types for different error scenarios.
-"""
+"""Domain exception hierarchy. Catch these at layer boundaries; never swallow silently."""
+from __future__ import annotations
 
 
-class HealthConnectException(Exception):
-    """Base exception for all Lighthouse HealthConnect errors"""
-    pass
+class HealthBridgeError(Exception):
+    """Root for all domain errors."""
 
 
-# Audio-related exceptions
-class AudioProcessingError(HealthConnectException):
-    """Base exception for audio-related errors"""
-    pass
+class ValidationError(HealthBridgeError):
+    """Input violated a business rule (distinct from Pydantic schema errors)."""
 
 
-class TranscriptionError(AudioProcessingError):
-    """Speech-to-text transcription failed"""
-    pass
+class RateLimitError(HealthBridgeError):
+    def __init__(self, phone_hash: str, count: int, limit: int) -> None:
+        super().__init__(f"Rate limit: {count}/{limit} messages in window")
+        self.phone_hash = phone_hash
+        self.count = count
+        self.limit = limit
 
 
-class TextToSpeechError(AudioProcessingError):
-    """Text-to-speech conversion failed"""
-    pass
+class EmergencyDetectedError(HealthBridgeError):
+    """Query matched emergency keywords — abort pipeline and send emergency response immediately."""
+
+    def __init__(self, disease_ids: list[str], keywords: list[str]) -> None:
+        super().__init__(f"Emergency in {disease_ids}: {keywords}")
+        self.disease_ids = disease_ids
+        self.keywords = keywords
 
 
-class AudioFileError(AudioProcessingError):
-    """Audio file not found or corrupted"""
-    pass
+class LanguageNotSupportedError(HealthBridgeError):
+    def __init__(self, code: str, supported: list[str]) -> None:
+        super().__init__(f"Language '{code}' unsupported. Supported: {supported}")
+        self.code = code
 
 
-class NATLASError(AudioProcessingError):
-    """N-ATLAS model error"""
-    pass
+class ExternalServiceError(HealthBridgeError):
+    """External API failed after all retries."""
+
+    def __init__(self, service: str, detail: str) -> None:
+        super().__init__(f"{service}: {detail}")
+        self.service = service
 
 
-class WhisperError(AudioProcessingError):
-    """Whisper model error"""
-    pass
+class RetrievalError(HealthBridgeError):
+    """Vector store or re-ranking failure."""
 
 
-# Language-related exceptions
-class LanguageError(HealthConnectException):
-    """Base exception for language-related errors"""
-    pass
+class LLMError(HealthBridgeError):
+    """LLM call failed or structured output validation failed after retries."""
 
 
-class LanguageDetectionError(LanguageError):
-    """Failed to detect language"""
-    pass
+class AudioError(HealthBridgeError):
+    """Transcription or synthesis failure."""
 
 
-class TranslationError(LanguageError):
-    """Translation failed"""
-    pass
+class WebhookAuthError(HealthBridgeError):
+    """Incoming webhook signature is invalid — reject with 401."""
 
 
-class UnsupportedLanguageError(LanguageError):
-    """Language is not supported"""
-    pass
+class DiseaseNotEnabledError(HealthBridgeError):
+    def __init__(self, disease_id: str) -> None:
+        super().__init__(f"Disease '{disease_id}' is disabled in diseases.yaml")
+        self.disease_id = disease_id
 
 
-# Knowledge base exceptions
-class KnowledgeBaseError(HealthConnectException):
-    """Base exception for KB-related errors"""
-    pass
-
-
-class VectorStoreError(KnowledgeBaseError):
-    """Vector store connection or operation failed"""
-    pass
-
-
-class DocumentLoadError(KnowledgeBaseError):
-    """Failed to load documents"""
-    pass
-
-
-class EmbeddingError(KnowledgeBaseError):
-    """Failed to generate embeddings"""
-    pass
-
-
-# LLM exceptions
-class LLMError(HealthConnectException):
-    """Base exception for LLM-related errors"""
-    pass
-
-
-class LLMResponseError(LLMError):
-    """LLM failed to generate a response"""
-    pass
-
-
-class LLMTimeoutError(LLMError):
-    """LLM request timed out"""
-    pass
-
-
-# Search exceptions
-class SearchError(HealthConnectException):
-    """Base exception for search-related errors"""
-    pass
-
-
-class WebSearchError(SearchError):
-    """Web search failed"""
-    pass
-
-
-class KBSearchError(SearchError):
-    """Knowledge base search failed"""
-    pass
-
-
-# Configuration exceptions
-class ConfigurationError(HealthConnectException):
-    """Configuration is invalid or missing"""
-    pass
-
-
-class APIKeyError(ConfigurationError):
-    """API key is missing or invalid"""
-    pass
-
-
-# Session exceptions
-class SessionError(HealthConnectException):
-    """Session state error"""
-    pass
+class CacheError(HealthBridgeError):
+    """Semantic cache read/write failure (non-fatal — always fall through to pipeline)."""
