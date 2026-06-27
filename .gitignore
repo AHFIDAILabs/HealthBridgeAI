@@ -215,6 +215,12 @@ last_kb_hash.txt
 *.mp3
 *.wav
 audio_cache/
+
+# Crawled KB data — stored in GCS, not git (copyright + size)
+data/crawled/
 data/*.zip
+last_kb_hash.txt
+
+# GCP credentials — never commit
 service-account*.json
 gcp-credentials*.json
