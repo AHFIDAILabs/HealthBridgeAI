@@ -162,7 +162,9 @@ async def process(request: Request) -> Response:
     # ── Audio transcription (if voice message) ────────────────────────────────
     if message.type == MessageType.AUDIO and message.media:
         try:
-            audio_bytes = await messaging.download_media(message.media.media_id)
+            # Prefer pre-resolved URL (if WhatChimp includes it); else use media_id
+            media_ref = message.media.url or message.media.media_id
+            audio_bytes = await messaging.download_media(media_ref)
             lang_hint = await _get_user_lang(request, message.from_number)
             text, detected_lang = await request.app.state.transcriber.transcribe(
                 audio_bytes, lang_hint

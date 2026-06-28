@@ -16,7 +16,8 @@ class Settings(BaseSettings):
     WHATCHAMP_API_URL: str = "https://app.whatchimp.com/api/v1"
     WHATCHAMP_PHONE_NUMBER: str          # E.164 sender number, e.g. +2348012345678
     WHATCHAMP_PHONE_NUMBER_ID: str       # Meta phone_number_id (required in all API calls)
-    WHATCHAMP_WEBHOOK_SECRET: str = ""   # Optional — Meta X-Hub-Signature-256 app secret
+    WHATCHAMP_WEBHOOK_SECRET: str = ""   # Meta app secret for X-Hub-Signature-256 (POST)
+    WHATCHAMP_WEBHOOK_VERIFY_TOKEN: str = ""  # Token for GET hub.challenge verification
 
     # ── LLM (OpenRouter) ─────────────────────────────────────────────────────
     OPENROUTER_API_KEY: str

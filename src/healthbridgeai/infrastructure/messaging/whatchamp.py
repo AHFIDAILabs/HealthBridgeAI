@@ -173,7 +173,7 @@ class WhatChampAdapter:
                 media=MediaInfo(
                     media_id=audio.get("id", ""),
                     mime_type=audio.get("mime_type", "audio/ogg"),
-                    media_url=audio.get("url"),  # included if WhatChimp pre-fetches
+                    url=audio.get("url"),  # included if WhatChimp pre-fetches the URL
                 ),
                 timestamp=timestamp,
             )
@@ -187,7 +187,7 @@ class WhatChampAdapter:
                 media=MediaInfo(
                     media_id=media_block.get("id", ""),
                     mime_type=media_block.get("mime_type", ""),
-                    media_url=media_block.get("url"),
+                    url=media_block.get("url"),
                 ),
                 timestamp=timestamp,
             )

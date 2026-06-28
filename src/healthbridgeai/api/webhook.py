@@ -4,13 +4,49 @@ from __future__ import annotations
 import json
 
 import structlog
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
+from healthbridgeai.config.settings import settings
 from healthbridgeai.core.exceptions import WebhookAuthError
 
 log = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["webhook"])
+
+
+@router.get("/webhook", status_code=200)
+async def webhook_verify(
+    hub_mode: str = Query("", alias="hub.mode"),
+    hub_verify_token: str = Query("", alias="hub.verify_token"),
+    hub_challenge: str = Query("", alias="hub.challenge"),
+) -> Response:
+    """
+    Meta webhook verification challenge (GET).
+
+    When you register a webhook URL in the Meta App Dashboard (or via WhatChimp),
+    Meta sends a GET request to confirm ownership:
+
+        GET /webhook?hub.mode=subscribe
+                    &hub.verify_token=<your-token>
+                    &hub.challenge=<random-string>
+
+    We must respond with hub.challenge as plain text and status 200.
+    The verify token must match WHATCHAMP_WEBHOOK_VERIFY_TOKEN in settings.
+    """
+    if hub_mode != "subscribe":
+        raise HTTPException(status_code=400, detail="hub.mode must be 'subscribe'")
+
+    expected = settings.WHATCHAMP_WEBHOOK_VERIFY_TOKEN
+    if not expected:
+        log.error("webhook.verify.token_not_configured")
+        raise HTTPException(status_code=500, detail="Webhook verify token not configured")
+
+    if hub_verify_token != expected:
+        log.warning("webhook.verify.token_mismatch")
+        raise HTTPException(status_code=403, detail="hub.verify_token mismatch")
+
+    log.info("webhook.verify.ok")
+    return Response(content=hub_challenge, media_type="text/plain")
 
 
 @router.post("/webhook", status_code=200)

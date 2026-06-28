@@ -115,7 +115,7 @@ steps:
       - --timeout=10s
       - --concurrency=80
       - --set-env-vars=GCP_PROJECT_ID=${_GCP_PROJECT}
-      - --set-secrets=WHATCHAMP_API_KEY=whatchamp-api-key:latest,WHATCHAMP_WEBHOOK_SECRET=whatchamp-webhook-secret:latest,PINECONE_API_KEY=pinecone-api-key:latest,OPENROUTER_API_KEY=openrouter-api-key:latest
+      - --set-secrets=WHATCHAMP_API_KEY=whatchamp-api-key:latest,WHATCHAMP_PHONE_NUMBER_ID=whatchamp-phone-number-id:latest,WHATCHAMP_WEBHOOK_SECRET=whatchamp-webhook-secret:latest,WHATCHAMP_WEBHOOK_VERIFY_TOKEN=whatchamp-webhook-verify-token:latest,PINECONE_API_KEY=pinecone-api-key:latest,OPENROUTER_API_KEY=openrouter-api-key:latest
 
   # ── 7. Deploy processor service ──────────────────────────────────────────────
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
@@ -138,7 +138,7 @@ steps:
       - --timeout=300s
       - --concurrency=4
       - --set-env-vars=GCP_PROJECT_ID=${_GCP_PROJECT}
-      - --set-secrets=WHATCHAMP_API_KEY=whatchamp-api-key:latest,WHATCHAMP_WEBHOOK_SECRET=whatchamp-webhook-secret:latest,PINECONE_API_KEY=pinecone-api-key:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,TAVILY_API_KEY=tavily-api-key:latest,HUGGINGFACE_TOKEN=huggingface-token:latest,YARNGPT_API_KEY=yarngpt-api-key:latest,NATLAS_API_KEY=natlas-api-key:latest
+      - --set-secrets=WHATCHAMP_API_KEY=whatchamp-api-key:latest,WHATCHAMP_PHONE_NUMBER_ID=whatchamp-phone-number-id:latest,WHATCHAMP_WEBHOOK_SECRET=whatchamp-webhook-secret:latest,WHATCHAMP_WEBHOOK_VERIFY_TOKEN=whatchamp-webhook-verify-token:latest,PINECONE_API_KEY=pinecone-api-key:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,TAVILY_API_KEY=tavily-api-key:latest,HUGGINGFACE_TOKEN=huggingface-token:latest,YARNGPT_API_KEY=yarngpt-api-key:latest,NATLAS_API_KEY=natlas-api-key:latest
 
 images:
   - ${_REPO}/webhook:$COMMIT_SHA
