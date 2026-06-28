@@ -11,13 +11,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    # ── Twilio ────────────────────────────────────────────────────────────────
-    TWILIO_ACCOUNT_SID: str
-    TWILIO_AUTH_TOKEN: str
-    TWILIO_WHATSAPP_FROM: str
-    TWILIO_WEBHOOK_URL: str
+    # ── WhatChimp (WhatsApp BSP) ──────────────────────────────────────────────
+    WHATCHAMP_API_KEY: str
+    WHATCHAMP_API_URL: str = "https://api.whatchamp.com/v1"
+    WHATCHAMP_PHONE_NUMBER: str          # E.164 format, e.g. +2348012345678
+    WHATCHAMP_WEBHOOK_SECRET: str        # HMAC-SHA256 validation of inbound events
 
-    # ── LLM ───────────────────────────────────────────────────────────────────
+    # ── LLM (OpenRouter) ─────────────────────────────────────────────────────
     OPENROUTER_API_KEY: str
     LLM_PRIMARY_MODEL: str = "anthropic/claude-haiku-4-5"
     LLM_HEAVY_MODEL: str = "anthropic/claude-sonnet-4-6"
@@ -32,10 +32,10 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "BAAI/bge-m3"
     PINECONE_INDEX_DIMENSION: int = 1024
 
-    # ── Web Search ────────────────────────────────────────────────────────────
+    # ── Web Search (Tavily) ───────────────────────────────────────────────────
     TAVILY_API_KEY: str
 
-    # ── Audio (optional — empty string activates fallback chain) ──────────────
+    # ── Audio (all optional — fallback chain activates when empty) ────────────
     YARNGPT_API_KEY: str = ""
     HUGGINGFACE_TOKEN: str = ""
     NATLAS_API_KEY: str = ""
@@ -45,17 +45,24 @@ class Settings(BaseSettings):
     GCS_BUCKET_NAME: str = "healthbridge-assets"
     FIRESTORE_DATABASE: str = "(default)"
 
+    # ── Pub/Sub ───────────────────────────────────────────────────────────────
+    PUBSUB_TOPIC_INBOUND: str = "healthbridge-inbound"
+    PUBSUB_SUBSCRIPTION_INBOUND: str = "healthbridge-inbound-sub"
+
     # ── Behaviour ─────────────────────────────────────────────────────────────
     SUPPORTED_LANGUAGES: list[str] = ["en", "yo", "ig", "ha", "pidgin"]
     RATE_LIMIT_MESSAGES_PER_MINUTE: int = 20
     CONVERSATION_HISTORY_TURNS: int = 5
 
     # ── Semantic Cache ────────────────────────────────────────────────────────
+    # Cosine similarity threshold — must be >= this to serve a cached response
     SEMANTIC_CACHE_THRESHOLD: float = 0.92
     CACHE_TTL_DAYS: int = 7
 
-    # ── RAG ───────────────────────────────────────────────────────────────────
+    # ── RAG Retrieval ─────────────────────────────────────────────────────────
+    # Min Pinecone score after re-ranking before triggering web search fallback
     MIN_RETRIEVAL_SCORE_DEFAULT: float = 0.6
+    # If best score < this, attempt HyDE before falling back to web search
     HYDE_FALLBACK_THRESHOLD: float = 0.5
 
 
