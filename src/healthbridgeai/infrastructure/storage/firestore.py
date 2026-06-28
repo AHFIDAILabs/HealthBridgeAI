@@ -1,130 +1,154 @@
-# modules/user_preferences.py: User language preference management with Redis
-"""
-UserPreferenceManager: Manages user language preferences using Redis.
-Stores only language preference - no statistics tracking.
-"""
+"""FirestoreUserStore / FirestoreConversationStore — IUserStore + IConversationStore."""
+from __future__ import annotations
 
-import redis
-import logging
+import hashlib
+import time
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+import structlog
+from google.cloud import firestore
+from google.cloud.firestore_v1.async_client import AsyncClient
+
+from healthbridgeai.config.settings import settings
+from healthbridgeai.core.models.user import ConversationTurn, RateLimit, User
+
+log = structlog.get_logger(__name__)
+
+_USERS_COL = "users"
+_RATE_COL = "rate_limits"
+_CONV_COL = "conversations"
+_TURNS_SUB = "turns"
+_MAX_TURNS_STORED = 40  # cap per user; only last N returned
 
 
-class UserPreferenceManager:
-    """
-    Manages user language preferences using Redis.
-    Simple storage: wa_id -TheDONOalaji> preferred_lang
-    """
-    
-    _instance = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(UserPreferenceManager, cls).__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-    
-    def __init__(self):
-        if self._initialized:
-            return
-        
-        try:
-            # Connect to Redis
-            self.redis_client = redis.Redis(
-                host='localhost',
-                port=6379,
-                db=0,
-                decode_responses=True  # Auto-decode bytes to strings
-            )
-            
-            # Test connection
-            self.redis_client.ping()
-            logger.info("✓ Redis connected successfully")
-            self._initialized = True
-            
-        except redis.ConnectionError as e:
-            logger.error(f"❌ Redis connection failed: {e}")
-            logger.warning("⚠️  Falling back to in-memory storage (will not persist)")
-            self.redis_client = None
-            self._memory_store = {}  # Fallback to dict
-            self._initialized = True
-    
-    def get_user_preference(self, wa_id: str) -> Optional[str]:
-        """
-        Get user's preferred language.
-        
-        Args:
-            wa_id: WhatsApp ID (phone number)
-            
-        Returns:
-            Language code ('ha', 'yo', 'ig', 'en') or None if not set
-        """
-        try:
-            if self.redis_client:
-                lang = self.redis_client.get(f"user:{wa_id}:lang")
-                return lang
-            else:
-                # Fallback to memory
-                return self._memory_store.get(wa_id)
-        except Exception as e:
-            logger.error(f"Error getting user preference: {e}")
+def _db() -> AsyncClient:
+    """Lazy singleton Firestore client (process-level)."""
+    if not hasattr(_db, "_client"):
+        _db._client = firestore.AsyncClient(
+            project=settings.GCP_PROJECT_ID,
+            database=settings.FIRESTORE_DATABASE,
+        )
+    return _db._client
+
+
+def _phone_hash(phone_number: str) -> str:
+    return hashlib.sha256(phone_number.encode()).hexdigest()[:12]
+
+
+# ── IUserStore ────────────────────────────────────────────────────────────────
+
+class FirestoreUserStore:
+    """Stores User documents keyed by phone_hash."""
+
+    async def get_user(self, phone_number: str) -> Optional[User]:
+        doc_id = _phone_hash(phone_number)
+        snap = await _db().collection(_USERS_COL).document(doc_id).get()
+        if not snap.exists:
             return None
-    
-    def set_user_preference(self, wa_id: str, lang: str) -> bool:
-        """
-        Set user's preferred language.
-        
-        Args:
-            wa_id: WhatsApp ID (phone number)
-            lang: Language code ('ha', 'yo', 'ig', 'en')
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        data = snap.to_dict()
+        data["phone_number"] = phone_number  # not stored in Firestore; inject at read time
         try:
-            if self.redis_client:
-                # Simple key-value storage
-                self.redis_client.set(f"user:{wa_id}:lang", lang)
-                logger.info(f"✓ Saved preference for {wa_id}: {lang}")
-                return True
+            return User(**data)
+        except Exception as exc:
+            log.error("firestore.get_user.parse_error", error=str(exc), doc_id=doc_id)
+            return None
+
+    async def upsert_user(self, user: User) -> None:
+        doc_id = _phone_hash(user.phone_number)
+        data = user.model_dump(exclude={"phone_number"})  # never persist plain phone number
+        data.pop("phone_hash", None)  # computed field; not stored
+        await _db().collection(_USERS_COL).document(doc_id).set(data, merge=True)
+
+    async def check_rate_limit(
+        self, phone_hash: str, limit: int, window_seconds: int
+    ) -> RateLimit:
+        doc_ref = _db().collection(_RATE_COL).document(phone_hash)
+
+        @firestore.async_transactional
+        async def _txn(transaction, ref) -> RateLimit:
+            snap = await ref.get(transaction=transaction)
+            now = int(time.time())
+            if snap.exists:
+                d = snap.to_dict()
+                window_start = d.get("window_start", now)
+                count = d.get("message_count", 0)
+                if now - window_start >= window_seconds:
+                    # New window
+                    window_start = now
+                    count = 1
+                else:
+                    count += 1
             else:
-                # Fallback to memory
-                self._memory_store[wa_id] = lang
-                logger.info(f"✓ Saved preference (memory) for {wa_id}: {lang}")
-                return True
-                
-        except Exception as e:
-            logger.error(f"Error setting user preference: {e}")
-            return False
-    
-    def is_first_time_user(self, wa_id: str) -> bool:
-        """
-        Check if this is user's first interaction.
-        
-        Args:
-            wa_id: WhatsApp ID (phone number)
-            
-        Returns:
-            True if first-time user (no language preference set), False otherwise
-        """
+                window_start = now
+                count = 1
+
+            transaction.set(
+                ref,
+                {"phone_hash": phone_hash, "window_start": window_start, "message_count": count},
+                merge=False,
+            )
+            return RateLimit(
+                phone_hash=phone_hash,
+                window_start=window_start,
+                message_count=count,
+            )
+
+        transaction = _db().transaction()
+        return await _txn(transaction, doc_ref)
+
+
+# ── IConversationStore ────────────────────────────────────────────────────────
+
+class FirestoreConversationStore:
+    """Stores conversation turns as Firestore sub-documents under conversations/{hash}/turns."""
+
+    async def get_recent_turns(self, phone_hash: str, n: int = 5) -> list[ConversationTurn]:
+        col = (
+            _db()
+            .collection(_CONV_COL)
+            .document(phone_hash)
+            .collection(_TURNS_SUB)
+        )
+        query = col.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(n)
+        snaps = await query.get()
+        turns = []
+        for snap in reversed(snaps):  # oldest first
+            try:
+                turns.append(ConversationTurn(**snap.to_dict()))
+            except Exception as exc:
+                log.warning("firestore.get_turns.parse_error", error=str(exc))
+        return turns
+
+    async def save_turn(self, phone_hash: str, turn: ConversationTurn) -> None:
+        col = (
+            _db()
+            .collection(_CONV_COL)
+            .document(phone_hash)
+            .collection(_TURNS_SUB)
+        )
+        # Use timestamp as document ID to enable ordering without Firestore index on a field
+        doc_id = str(turn.timestamp) + "_" + turn.role[:1]
+        await col.document(doc_id).set(turn.model_dump())
+        # Best-effort trim: if we have too many turns, delete the oldest ones
+        await self._trim(col)
+
+    async def clear_history(self, phone_hash: str) -> None:
+        col = (
+            _db()
+            .collection(_CONV_COL)
+            .document(phone_hash)
+            .collection(_TURNS_SUB)
+        )
+        snaps = await col.get()
+        for snap in snaps:
+            await snap.reference.delete()
+
+    async def _trim(self, col) -> None:
         try:
-            if self.redis_client:
-                return not self.redis_client.exists(f"user:{wa_id}:lang")
-            else:
-                return wa_id not in self._memory_store
-        except Exception as e:
-            logger.error(f"Error checking first-time user: {e}")
-            return False
-
-
-# Singleton instance
-_preference_manager = None
-
-
-def get_preference_manager() -> UserPreferenceManager:
-    """Get singleton instance of UserPreferenceManager."""
-    global _preference_manager
-    if _preference_manager is None:
-        _preference_manager = UserPreferenceManager()
-    return _preference_manager
+            all_snaps = await col.order_by("timestamp").get()
+            excess = len(all_snaps) - _MAX_TURNS_STORED
+            if excess > 0:
+                for snap in all_snaps[:excess]:
+                    await snap.reference.delete()
+        except Exception:
+            pass  # trim is best-effort

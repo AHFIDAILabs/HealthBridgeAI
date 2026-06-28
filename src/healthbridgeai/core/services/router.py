@@ -73,7 +73,7 @@ class RouterService:
                 system=_ROUTER_SYSTEM.format(intents=_INTENT_LIST),
                 user=english_text[: settings.MAX_USER_INPUT_CHARS],
                 response_model=_RouterLLMOutput,
-                model=None,  # resolved to LLM_ROUTER_MODEL by the adapter
+                model=settings.LLM_ROUTER_MODEL,
                 temperature=0.0,
             )
         except Exception as exc:

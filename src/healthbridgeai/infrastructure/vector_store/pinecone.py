@@ -1,157 +1,159 @@
-# Vector Store Management - vector_store_manager.py: vector store management utilities for Lighthouse HealthConnect
-import logging
-from typing import List
-from langchain_core.documents import Document
-from langchain_pinecone import Pinecone as LangchainPinecone
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from pinecone import Pinecone, ServerlessSpec
-import time
+"""PineconeAdapter — IVectorStore implementation using Pinecone hybrid search."""
+from __future__ import annotations
 
-from config import (
-    PINECONE_API_KEY,
-    PINECONE_INDEX_NAME,
-    PINECONE_REGION,
-    PINECONE_CLOUD,
-    EMBEDDING_MODEL,
-    TEXT_KEY,
-)
+import structlog
+from pinecone import Pinecone
 
-logger = logging.getLogger(__name__)
+from healthbridgeai.config.settings import settings
+from healthbridgeai.core.exceptions import RetrievalError
+from healthbridgeai.core.models.retrieval import Chunk, Source
+
+log = structlog.get_logger(__name__)
+
+_BATCH_SIZE = 100  # max vectors per upsert call
 
 
-def _init_pinecone_index():
+class PineconeAdapter:
     """
-    Initializes Pinecone client and ensures the index exists.
+    Pinecone hybrid-search adapter.
+    Uses pre-computed BGE-M3 dense + lexical sparse vectors.
+    Index must be created with dotproduct metric and 1024 dimensions.
     """
-    if not PINECONE_API_KEY:
-        raise ValueError("PINECONE_API_KEY is not set in environment variables")
-    
-    pc = Pinecone(api_key=PINECONE_API_KEY)
 
-    # Check if index exists
-    existing_indexes = [idx["name"] for idx in pc.list_indexes()]
-    
-    if PINECONE_INDEX_NAME not in existing_indexes:
-        logger.info(
-            f"Index '{PINECONE_INDEX_NAME}' not found. Creating a new one in {PINECONE_CLOUD}-{PINECONE_REGION}..."
+    def __init__(self) -> None:
+        pc = Pinecone(api_key=settings.PINECONE_API_KEY)
+        self._index = pc.Index(settings.PINECONE_INDEX_NAME)
+        log.info("pinecone.connected", index=settings.PINECONE_INDEX_NAME)
+
+    async def hybrid_search(
+        self,
+        query_text: str,
+        query_embedding: list[float],
+        sparse_vector: dict[str, list],
+        namespace: str,
+        top_k: int = 20,
+        alpha: float = 0.7,
+        chunk_type_filter: str | None = None,
+    ) -> list[Chunk]:
+        """
+        Convex combination of dense + sparse via manual vector scaling.
+        alpha=0.7 → 70% dense, 30% sparse.
+        """
+        scaled_dense, scaled_sparse = _hybrid_convex_scale(
+            query_embedding, sparse_vector, alpha
         )
-        
+
+        query_kwargs: dict = {
+            "namespace": namespace,
+            "vector": scaled_dense,
+            "sparse_vector": scaled_sparse,
+            "top_k": top_k,
+            "include_metadata": True,
+        }
+        if chunk_type_filter:
+            query_kwargs["filter"] = {"chunk_type": {"$eq": chunk_type_filter}}
+
         try:
-            pc.create_index(
-                name=PINECONE_INDEX_NAME,
-                dimension=384,  # matches paraphrase-multilingual-MiniLM-L12-v2 embedding size
-                metric="cosine",
-                spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION),
+            import asyncio
+            loop = asyncio.get_event_loop()
+            results = await loop.run_in_executor(
+                None, lambda: self._index.query(**query_kwargs)
             )
-            
-            # Wait for index to be ready
-            logger.info("Waiting for index to be ready...")
-            while True:
-                index_stats = pc.describe_index(PINECONE_INDEX_NAME)
-                if index_stats.status.ready:
-                    break
-                time.sleep(1)
-            logger.info("Index is ready!")
-            
-        except Exception as e:
-            logger.error(f"Failed to create index: {e}")
-            raise
-    else:
-        logger.info(f"Using existing index '{PINECONE_INDEX_NAME}'.")
+        except Exception as exc:
+            raise RetrievalError(f"Pinecone query failed in {namespace}: {exc}") from exc
 
-    return pc
+        return [_match_to_chunk(m) for m in results.matches if m.metadata]
 
-
-def get_vector_store():
-    """
-    Returns an initialized LangchainPinecone vector store instance.
-    This function is used for querying the Pinecone vector store.
-    """
-    try:
-        _init_pinecone_index()
-        embeddings = HuggingFaceEmbeddings(
-            model_name=EMBEDDING_MODEL,
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True}
-        )
-        
-        vector_store = LangchainPinecone.from_existing_index(
-            index_name=PINECONE_INDEX_NAME,
-            embedding=embeddings,
-            text_key=TEXT_KEY,
-        )
-        logger.info(f"Connected to Pinecone index: {PINECONE_INDEX_NAME}")
-        return vector_store
-    except Exception as e:
-        logger.error(f"Could not get LangchainPinecone vector store: {e}")
-        raise
-
-
-def save_vector_store(documents: List[Document]):
-    """
-    Saves already chunked documents to the Pinecone vector store in batches.
-    """
-    if not documents:
-        logger.info("No documents provided to save to Pinecone. Skipping.")
-        return
-
-    try:
-        pc = _init_pinecone_index()
-        
-        # Get the index
-        index = pc.Index(PINECONE_INDEX_NAME)
-        
-        # Clear existing data (optional - remove if you want to append)
-        logger.info("Clearing existing vectors from index...")
+    async def upsert_chunks(self, chunks: list[dict], namespace: str) -> int:
+        """Upsert pre-embedded chunk vectors. Returns count upserted."""
+        total = 0
         try:
-            # Check if index has any vectors first
-            index_stats = index.describe_index_stats()
-            if index_stats.total_vector_count > 0:
-                logger.info(f"Found {index_stats.total_vector_count} existing vectors, deleting...")
-                index.delete(delete_all=True)
-                # Wait a bit for deletion to complete
-                time.sleep(2)
-            else:
-                logger.info("Index is already empty, skipping deletion")
-        except Exception as e:
-            logger.warning(f"Could not clear existing vectors (this is OK for new indexes): {e}")
-        
-        embeddings = HuggingFaceEmbeddings(
-            model_name=EMBEDDING_MODEL,
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True}
-        )
-        
-        # Create vector store and add documents
-        vector_store = LangchainPinecone(
-            index=index,
-            embedding=embeddings,
-            text_key=TEXT_KEY,
-        )
-
-        BATCH_SIZE = 50  # Reduced batch size for stability
-        total_chunks_saved = 0
-        
-        for i in range(0, len(documents), BATCH_SIZE):
-            batch = documents[i : i + BATCH_SIZE]
-            try:
-                vector_store.add_documents(batch)
-                total_chunks_saved += len(batch)
-                logger.info(
-                    f"Saved batch {i // BATCH_SIZE + 1} "
-                    f"({total_chunks_saved}/{len(documents)} chunks saved)"
+            import asyncio
+            loop = asyncio.get_event_loop()
+            for i in range(0, len(chunks), _BATCH_SIZE):
+                batch = chunks[i: i + _BATCH_SIZE]
+                vectors = [
+                    {
+                        "id": c["id"],
+                        "values": c["embedding"],
+                        "sparse_values": c.get("sparse_embedding", {"indices": [], "values": []}),
+                        "metadata": c["metadata"],
+                    }
+                    for c in batch
+                ]
+                await loop.run_in_executor(
+                    None,
+                    lambda v=vectors: self._index.upsert(vectors=v, namespace=namespace),
                 )
-                # Small delay between batches
-                time.sleep(0.5)
-            except Exception as e:
-                logger.error(f"Failed to save batch {i // BATCH_SIZE + 1}: {e}")
-                # Continue with next batch
+                total += len(batch)
+                log.debug("pinecone.upsert.batch", count=total, namespace=namespace)
+        except Exception as exc:
+            raise RetrievalError(f"Pinecone upsert failed: {exc}") from exc
+        return total
 
-        logger.info(
-            f"Saved {total_chunks_saved} chunks to index '{PINECONE_INDEX_NAME}'."
-        )
-    except Exception as e:
-        logger.error(
-            f"Failed to save documents to Pinecone index '{PINECONE_INDEX_NAME}': {e}"
-        )
-        raise
+    async def delete_namespace(self, namespace: str) -> None:
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: self._index.delete(delete_all=True, namespace=namespace),
+            )
+            log.info("pinecone.namespace_deleted", namespace=namespace)
+        except Exception as exc:
+            raise RetrievalError(f"Pinecone delete_namespace failed: {exc}") from exc
+
+    async def describe_index(self) -> dict:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        stats = await loop.run_in_executor(None, self._index.describe_index_stats)
+        return {
+            "dimension": stats.dimension,
+            "total_vector_count": stats.total_vector_count,
+            "namespaces": {
+                ns: ns_stats.vector_count
+                for ns, ns_stats in (stats.namespaces or {}).items()
+            },
+        }
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _hybrid_convex_scale(
+    dense: list[float],
+    sparse: dict[str, list],
+    alpha: float,
+) -> tuple[list[float], dict]:
+    """
+    Scale dense by alpha and sparse by (1 - alpha).
+    Equivalent to pinecone_text.hybrid.hybrid_convex_scale but dependency-free.
+    """
+    scaled_dense = [v * alpha for v in dense]
+    scaled_sparse = {
+        "indices": sparse.get("indices", []),
+        "values": [v * (1 - alpha) for v in sparse.get("values", [])],
+    }
+    return scaled_dense, scaled_sparse
+
+
+def _match_to_chunk(match) -> Chunk:
+    meta = match.metadata or {}
+    source = Source(
+        index=int(meta.get("source_index", 1)),
+        title=str(meta.get("source_title", "Unknown Source")),
+        url=str(meta.get("source_url", "")),
+        domain=str(meta.get("source_domain", "")),
+        source_type=str(meta.get("source_type", "guideline")),
+        section=meta.get("source_section") or None,
+        page_number=int(meta["source_page_number"]) if meta.get("source_page_number") else None,
+    )
+    return Chunk(
+        text=str(meta.get("text", "")),
+        score=float(match.score or 0.0),
+        disease=str(meta.get("disease", "")),
+        doc_id=str(meta.get("doc_id", match.id)),
+        source=source,
+        chunk_type=str(meta.get("chunk_type", "general")),
+        chunk_index=int(meta.get("chunk_index", 0)),
+        language=str(meta.get("language", "en")),
+    )

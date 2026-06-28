@@ -1,203 +1,177 @@
-# modules/cache_manager.py: Persistent cache for expensive operations
+"""SemanticCache — IResponseCache implementation using Pinecone response-cache namespace."""
+from __future__ import annotations
+
+import asyncio
 import hashlib
-import pickle
-import os
-import json
 import time
-from typing import Optional, Any, Dict
-from pathlib import Path
-import logging
+from typing import Optional
 
-logger = logging.getLogger(__name__)
+import structlog
+from pinecone import Pinecone
+
+from healthbridgeai.config.settings import settings
+from healthbridgeai.core.models.response import CachedResponse
+
+log = structlog.get_logger(__name__)
+
+_CACHE_NAMESPACE = "response-cache"
 
 
-class CacheManager:
-    """Manages persistent cache for translations and KB results"""
-    
-    def __init__(self, cache_dir: str = ".cache", ttl: int = 86400):
-        """
-        Initialize cache manager
-        
-        Args:
-            cache_dir: Directory to store cache files
-            ttl: Time-to-live in seconds (default: 24 hours)
-        """
-        self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(exist_ok=True)
-        self.ttl = ttl
-        
-        # Create subdirectories for different cache types
-        self.translation_dir = self.cache_dir / "translations"
-        self.kb_dir = self.cache_dir / "kb_results"
-        self.embeddings_dir = self.cache_dir / "embeddings"
-        
-        for directory in [self.translation_dir, self.kb_dir, self.embeddings_dir]:
-            directory.mkdir(exist_ok=True)
-        
-        logger.info(f"Cache initialized at {self.cache_dir}")
-    
-    def _make_key(self, text: str) -> str:
-        """Generate cache key from text"""
-        return hashlib.md5(text.encode('utf-8')).hexdigest()
-    
-    def _get_cache_path(self, key: str, cache_type: str = "general") -> Path:
-        """Get full path for cache file"""
-        if cache_type == "translation":
-            return self.translation_dir / f"{key}.pkl"
-        elif cache_type == "kb":
-            return self.kb_dir / f"{key}.pkl"
-        elif cache_type == "embedding":
-            return self.embeddings_dir / f"{key}.pkl"
-        else:
-            return self.cache_dir / f"{key}.pkl"
-    
-    def _is_expired(self, file_path: Path) -> bool:
-        """Check if cache file is expired"""
-        if not file_path.exists():
-            return True
-        
-        file_age = time.time() - file_path.stat().st_mtime
-        return file_age > self.ttl
-    
-    def _read_cache(self, key: str, cache_type: str = "general") -> Optional[Any]:
-        """Read from cache if available and not expired"""
-        cache_path = self._get_cache_path(key, cache_type)
-        
-        if not cache_path.exists():
+class SemanticCache:
+    """
+    Stores response embeddings in a dedicated Pinecone namespace.
+    Metadata holds all CachedResponse fields (flat key-value, ≤ 40 KB limit).
+
+    Never-cache rules are enforced by the pipeline before calling store().
+    This adapter enforces them again as a safety net.
+    """
+
+    def __init__(self) -> None:
+        pc = Pinecone(api_key=settings.PINECONE_API_KEY)
+        self._index = pc.Index(settings.PINECONE_INDEX_NAME)
+
+    async def lookup(
+        self,
+        english_query: str,
+        query_embedding: list[float],
+        disease_ids: list[str],
+        threshold: float = 0.92,
+    ) -> Optional[CachedResponse]:
+        """Return a CachedResponse if score >= threshold, disease_ids match, and not expired."""
+        now = int(time.time())
+        try:
+            loop = asyncio.get_event_loop()
+            results = await loop.run_in_executor(
+                None,
+                lambda: self._index.query(
+                    namespace=_CACHE_NAMESPACE,
+                    vector=query_embedding,
+                    top_k=5,
+                    include_metadata=True,
+                    filter={"disease_ids": {"$eq": ",".join(sorted(disease_ids))}},
+                ),
+            )
+        except Exception as exc:
+            log.warning("cache.lookup.failed", error=str(exc))
             return None
-        
-        if self._is_expired(cache_path):
-            logger.debug(f"Cache expired for key: {key}")
+
+        for match in results.matches:
+            if match.score < threshold:
+                break  # sorted descending; no point checking further
+            meta = match.metadata or {}
+            if int(meta.get("expires_at", 0)) < now:
+                continue  # expired entry
             try:
-                cache_path.unlink()
-            except Exception as e:
-                logger.warning(f"Failed to delete expired cache: {e}")
-            return None
-        
+                cached = _meta_to_cached(meta)
+            except Exception:
+                continue
+            log.info("cache.hit", score=round(match.score, 3), disease_ids=disease_ids)
+            # Increment hit_count asynchronously (best-effort, fire-and-forget)
+            asyncio.ensure_future(self._bump_hit_count(match.id, meta))
+            return cached
+
+        return None
+
+    async def store(
+        self,
+        english_query: str,
+        query_embedding: list[float],
+        response: CachedResponse,
+    ) -> None:
+        """Upsert the response embedding + metadata into the cache namespace."""
+        # Safety-net: enforce never-cache rules even if caller skipped them
+        if response.confidence == "low":
+            return
+
+        vector_id = _make_id(english_query, response.disease_ids)
+        meta = _cached_to_meta(response)
         try:
-            with open(cache_path, 'rb') as f:
-                data = pickle.load(f)
-                logger.debug(f"Cache hit for key: {key}")
-                return data
-        except Exception as e:
-            logger.error(f"Failed to read cache: {e}")
-            return None
-    
-    def _write_cache(self, key: str, data: Any, cache_type: str = "general"):
-        """Write data to cache"""
-        cache_path = self._get_cache_path(key, cache_type)
-        
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: self._index.upsert(
+                    vectors=[{"id": vector_id, "values": query_embedding, "metadata": meta}],
+                    namespace=_CACHE_NAMESPACE,
+                ),
+            )
+            log.debug("cache.stored", vector_id=vector_id[:12])
+        except Exception as exc:
+            log.warning("cache.store.failed", error=str(exc))
+
+    async def invalidate(self, disease_id: str) -> int:
+        """Delete all cache entries that contain this disease_id. Returns count deleted."""
         try:
-            with open(cache_path, 'wb') as f:
-                pickle.dump(data, f)
-            logger.debug(f"Cache written for key: {key}")
-        except Exception as e:
-            logger.error(f"Failed to write cache: {e}")
-    
-    # Translation cache methods
-    def get_translation(self, text: str, source_lang: str, target_lang: str) -> Optional[str]:
-        """Get cached translation"""
-        cache_key = self._make_key(f"{source_lang}->{target_lang}:{text}")
-        result = self._read_cache(cache_key, "translation")
-        
-        if result:
-            logger.info(f"Translation cache hit: {source_lang} -> {target_lang}")
-        
-        return result
-    
-    def set_translation(self, text: str, source_lang: str, target_lang: str, translation: str):
-        """Cache a translation"""
-        cache_key = self._make_key(f"{source_lang}->{target_lang}:{text}")
-        self._write_cache(cache_key, translation, "translation")
-        logger.info(f"Translation cached: {source_lang} -> {target_lang}")
-    
-    # KB result cache methods
-    def get_kb_result(self, query: str, lang: str = "en") -> Optional[Dict[str, Any]]:
-        """Get cached KB search result"""
-        cache_key = self._make_key(f"kb:{lang}:{query}")
-        result = self._read_cache(cache_key, "kb")
-        
-        if result:
-            logger.info(f"KB cache hit for query: {query[:50]}...")
-        
-        return result
-    
-    def set_kb_result(self, query: str, result: Dict[str, Any], lang: str = "en"):
-        """Cache a KB search result"""
-        cache_key = self._make_key(f"kb:{lang}:{query}")
-        self._write_cache(cache_key, result, "kb")
-        logger.info(f"KB result cached for query: {query[:50]}...")
-    
-    # Embedding cache methods
-    def get_embedding(self, text: str) -> Optional[list]:
-        """Get cached embedding"""
-        cache_key = self._make_key(f"embed:{text}")
-        return self._read_cache(cache_key, "embedding")
-    
-    def set_embedding(self, text: str, embedding: list):
-        """Cache an embedding"""
-        cache_key = self._make_key(f"embed:{text}")
-        self._write_cache(cache_key, embedding, "embedding")
-    
-    # Cache management methods
-    def clear_all(self):
-        """Clear all cache files"""
+            loop = asyncio.get_event_loop()
+            # Fetch matching IDs first (metadata filter on delete requires paid plan)
+            results = await loop.run_in_executor(
+                None,
+                lambda: self._index.query(
+                    namespace=_CACHE_NAMESPACE,
+                    vector=[0.0] * settings.PINECONE_INDEX_DIMENSION,
+                    top_k=10_000,
+                    include_metadata=False,
+                    filter={"disease_ids": {"$contains": disease_id}},
+                ),
+            )
+            ids = [m.id for m in results.matches]
+            if ids:
+                await loop.run_in_executor(
+                    None,
+                    lambda: self._index.delete(ids=ids, namespace=_CACHE_NAMESPACE),
+                )
+            log.info("cache.invalidated", disease_id=disease_id, count=len(ids))
+            return len(ids)
+        except Exception as exc:
+            log.warning("cache.invalidate.failed", error=str(exc))
+            return 0
+
+    async def _bump_hit_count(self, vector_id: str, meta: dict) -> None:
         try:
-            for directory in [self.translation_dir, self.kb_dir, self.embeddings_dir]:
-                for file in directory.glob("*.pkl"):
-                    file.unlink()
-            logger.info("All cache cleared")
-        except Exception as e:
-            logger.error(f"Failed to clear cache: {e}")
-    
-    def clear_expired(self):
-        """Remove all expired cache files"""
-        count = 0
-        try:
-            for directory in [self.translation_dir, self.kb_dir, self.embeddings_dir]:
-                for file in directory.glob("*.pkl"):
-                    if self._is_expired(file):
-                        file.unlink()
-                        count += 1
-            logger.info(f"Removed {count} expired cache files")
-        except Exception as e:
-            logger.error(f"Failed to clear expired cache: {e}")
-    
-    def get_cache_stats(self) -> Dict[str, int]:
-        """Get cache statistics"""
-        stats = {
-            "translations": len(list(self.translation_dir.glob("*.pkl"))),
-            "kb_results": len(list(self.kb_dir.glob("*.pkl"))),
-            "embeddings": len(list(self.embeddings_dir.glob("*.pkl"))),
-        }
-        stats["total"] = sum(stats.values())
-        return stats
-    
-    def get_cache_size(self) -> int:
-        """Get total cache size in bytes"""
-        total_size = 0
-        try:
-            for directory in [self.translation_dir, self.kb_dir, self.embeddings_dir]:
-                for file in directory.glob("*.pkl"):
-                    total_size += file.stat().st_size
-        except Exception as e:
-            logger.error(f"Failed to calculate cache size: {e}")
-        return total_size
+            new_meta = dict(meta)
+            new_meta["hit_count"] = int(meta.get("hit_count", 0)) + 1
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: self._index.update(
+                    id=vector_id,
+                    set_metadata={"hit_count": new_meta["hit_count"]},
+                    namespace=_CACHE_NAMESPACE,
+                ),
+            )
+        except Exception:
+            pass  # best-effort
 
 
-# Global cache instance
-_cache_instance: Optional[CacheManager] = None
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _make_id(english_query: str, disease_ids_str: str) -> str:
+    key = f"{disease_ids_str}:{english_query[:200]}"
+    return hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
-def get_cache() -> CacheManager:
-    """Get the global cache instance (singleton)"""
-    global _cache_instance
-    if _cache_instance is None:
-        _cache_instance = CacheManager()
-    return _cache_instance
+def _cached_to_meta(r: CachedResponse) -> dict:
+    return {
+        "english_query": r.english_query[:500],
+        "disease_ids": r.disease_ids,
+        "query_intent": r.query_intent,
+        "english_response": r.english_response[:8000],  # Pinecone metadata limit ~40 KB
+        "sources_json": r.sources_json[:4000],
+        "confidence": r.confidence,
+        "created_at": r.created_at,
+        "expires_at": r.expires_at,
+        "hit_count": r.hit_count,
+    }
 
 
-def clear_cache():
-    """Clear all cached data"""
-    cache = get_cache()
-    cache.clear_all()
+def _meta_to_cached(meta: dict) -> CachedResponse:
+    return CachedResponse(
+        english_query=meta["english_query"],
+        disease_ids=meta["disease_ids"],
+        query_intent=meta["query_intent"],
+        english_response=meta["english_response"],
+        sources_json=meta.get("sources_json", "[]"),
+        confidence=meta["confidence"],
+        created_at=int(meta["created_at"]),
+        expires_at=int(meta["expires_at"]),
+        hit_count=int(meta.get("hit_count", 0)),
+    )
