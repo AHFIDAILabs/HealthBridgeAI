@@ -108,4 +108,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--cov=src/healthbridgeai --cov-report=term-missing --cov-fail-under=80"
+addopts = "--cov=src/healthbridgeai --cov-report=term-missing --cov-fail-under=80 -m 'not integration'"
+
+[tool.pytest.ini_options.markers]
+integration = "marks tests as integration tests (require live GCP/Pinecone; run with INTEGRATION=1)"

@@ -1,0 +1,61 @@
+# Golden evaluation dataset for RAGAS assessment.
+# Run:  python scripts/evaluate_kb.py --dataset data/eval/golden.yaml
+#
+# Add question/ground_truth pairs before enabling a disease in production.
+# Ground truth should be factually accurate and based on WHO/CDC guidelines.
+
+questions:
+  # ── TB ──────────────────────────────────────────────────────────────────────
+  - question: "What are the main symptoms of tuberculosis?"
+    ground_truth: >
+      The main symptoms of tuberculosis (TB) include a persistent cough lasting
+      more than 3 weeks (often with blood-stained sputum), unexplained weight
+      loss, fever, night sweats, chest pain, and fatigue. These are known as
+      the classic TB symptom complex.
+    disease_id: tb
+
+  - question: "How long does standard TB treatment last?"
+    ground_truth: >
+      Standard first-line TB treatment lasts 6 months. It consists of an
+      intensive phase of 2 months with four drugs (isoniazid, rifampicin,
+      pyrazinamide, and ethambutol — abbreviated HRZE), followed by a
+      continuation phase of 4 months with two drugs (isoniazid and
+      rifampicin — HR).
+    disease_id: tb
+
+  - question: "What is MDR-TB and how is it treated?"
+    ground_truth: >
+      MDR-TB (multidrug-resistant tuberculosis) is caused by TB bacteria
+      resistant to at least isoniazid and rifampicin, the two most powerful
+      first-line TB drugs. Treatment requires second-line drugs, lasts 18–24
+      months or longer, and may include newer drugs such as bedaquiline and
+      delamanid. It must be managed in specialist centres.
+    disease_id: tb
+
+  - question: "Can TB be spread through the air?"
+    ground_truth: >
+      Yes. TB is an airborne disease spread when a person with active pulmonary
+      TB coughs, sneezes, speaks, or sings, releasing tiny droplet nuclei
+      containing Mycobacterium tuberculosis. These can remain suspended in the
+      air for hours. TB is NOT spread through casual contact, sharing food, or
+      touching surfaces.
+    disease_id: tb
+
+  - question: "What is latent tuberculosis infection?"
+    ground_truth: >
+      Latent TB infection (LTBI) occurs when a person has inhaled TB bacteria
+      but the immune system has contained the infection and the person has no
+      symptoms and is not infectious. Approximately 5–10% of people with LTBI
+      will develop active TB disease during their lifetime. LTBI can be
+      treated with isoniazid preventive therapy (IPT) to reduce this risk.
+    disease_id: tb
+
+  - question: "Is TB treatment free in Nigeria?"
+    ground_truth: >
+      Yes. In Nigeria, TB diagnosis and treatment are provided free of charge
+      through the National Tuberculosis and Leprosy Control Programme (NTBLCP)
+      at designated government health facilities. Patients receive free
+      medications under the DOTS (Directly Observed Treatment Short-course)
+      strategy. Contact the nearest government health centre or refer to
+      ntblcp.gov.ng for facility locations.
+    disease_id: tb
