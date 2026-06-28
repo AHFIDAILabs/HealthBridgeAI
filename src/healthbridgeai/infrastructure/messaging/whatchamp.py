@@ -154,11 +154,17 @@ class WhatChampAdapter:
         message_id = msg.get("id", "")
         timestamp = int(msg.get("timestamp", 0))
 
+        # to_number comes from the webhook metadata block (bot's display number)
+        meta_block = value.get("metadata", {})
+        display = meta_block.get("display_phone_number", "")
+        to_number = "+" + display.lstrip("+") if display else ""
+
         # ── Map to MessageType ────────────────────────────────────────────────
         if msg_type_raw == "text":
             return InboundMessage(
                 message_id=message_id,
                 from_number=from_number,
+                to_number=to_number,
                 type=MessageType.TEXT,
                 text=msg["text"]["body"],
                 timestamp=timestamp,
@@ -169,6 +175,7 @@ class WhatChampAdapter:
             return InboundMessage(
                 message_id=message_id,
                 from_number=from_number,
+                to_number=to_number,
                 type=MessageType.AUDIO,
                 media=MediaInfo(
                     media_id=audio.get("id", ""),
@@ -183,6 +190,7 @@ class WhatChampAdapter:
             return InboundMessage(
                 message_id=message_id,
                 from_number=from_number,
+                to_number=to_number,
                 type=MessageType.IMAGE if msg_type_raw == "image" else MessageType.TEXT,
                 media=MediaInfo(
                     media_id=media_block.get("id", ""),
