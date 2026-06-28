@@ -6,43 +6,54 @@ specific call(s) relevant to what they're testing.
 """
 from __future__ import annotations
 
+import os
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from healthbridgeai.core.models.disease import DiseaseConfig, DiseaseRegistry
+# Inject dummy env vars so Settings() doesn't raise ValidationError in unit tests.
+# setdefault keeps real values intact if a .env file already provides them.
+_TEST_ENV_DEFAULTS = {
+    "WHATCHAMP_API_KEY": "test-api-key",
+    "WHATCHAMP_PHONE_NUMBER": "+2340000000000",
+    "WHATCHAMP_PHONE_NUMBER_ID": "000000000000",
+    "OPENROUTER_API_KEY": "test-openrouter-key",
+    "PINECONE_API_KEY": "test-pinecone-key",
+    "TAVILY_API_KEY": "test-tavily-key",
+    "GCP_PROJECT_ID": "test-project-id",
+}
+for _k, _v in _TEST_ENV_DEFAULTS.items():
+    os.environ.setdefault(_k, _v)
+
+from healthbridgeai.core.models.disease import (
+    DiseaseConfig,
+    DiseaseRegistry,
+    QueryIntent,
+    RouteResult,
+)
 from healthbridgeai.core.models.message import InboundMessage, MessageType
-from healthbridgeai.core.models.response import BotResponse, LLMResponse
-from healthbridgeai.core.models.retrieval import Chunk, RetrievalResult, RouteResult, Source
+from healthbridgeai.core.models.response import BotResponse, CachedResponse, LLMResponse
+from healthbridgeai.core.models.retrieval import Chunk, RetrievalResult, Source, WebResult
 from healthbridgeai.core.models.user import RateLimit, User
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _dense_vec(val: float = 0.1, dim: int = 1024) -> list[float]:
-    return [val] * dim
-
-
-def _sparse_vec(n: int = 3) -> dict:
-    return {"indices": list(range(n)), "values": [0.5] * n}
-
-
 def _make_chunk(text: str = "TB is caused by Mycobacterium tuberculosis.", score: float = 0.8) -> Chunk:
     return Chunk(
-        chunk_id="abc123",
         text=text,
+        score=score,
+        disease="tb",
+        doc_id="abc123",
         source=Source(
+            index=1,
             title="WHO TB Guidelines 2023",
             url="https://who.int/tb",
-            publication_date="2023-01-01",
-            publisher="WHO",
-            is_web_result=False,
+            domain="who.int",
+            source_type="guideline",
         ),
-        disease_id="tb",
-        chunk_type="knowledge",
-        embedding=_dense_vec(0.5),
-        sparse_embedding=_sparse_vec(),
-        score=score,
+        chunk_type="treatment",
     )
 
 
@@ -52,10 +63,9 @@ def _make_chunk(text: str = "TB is caused by Mycobacterium tuberculosis.", score
 def mock_llm() -> AsyncMock:
     """ILLMClient mock with sensible defaults."""
     llm = AsyncMock()
-    llm.embed.return_value = [_dense_vec()]
-    llm.embed_sparse.return_value = [_sparse_vec()]
+    llm.embed.return_value = [[0.1] * 1024]
+    llm.embed_sparse.return_value = [{"indices": [0, 1, 2], "values": [0.5, 0.3, 0.2]}]
     llm.complete.return_value = "This is a test response."
-    # structured() returns are set per-test via side_effect or return_value
     llm.structured.return_value = MagicMock()
     return llm
 
@@ -81,16 +91,22 @@ def mock_web_search() -> AsyncMock:
 
 @pytest.fixture
 def mock_user_store() -> AsyncMock:
-    """IUserStore mock with a default user and pass-through rate limit."""
+    """IUserStore mock with a default user and a passing rate limit."""
+    now = int(time.time())
     store = AsyncMock()
     store.get_user.return_value = User(
         phone_number="+2348012345678",
         language_code="en",
         audio_mode=False,
+        created_at=now,
+        last_seen_at=now,
     )
     store.upsert_user.return_value = None
     store.check_rate_limit.return_value = RateLimit(
-        allowed=True, current_count=1, limit=20, window_seconds=60
+        phone_hash="abc123testxx",
+        window_start=now,
+        message_count=1,
+        is_blocked=False,
     )
     return store
 
@@ -100,15 +116,15 @@ def mock_conv_store() -> AsyncMock:
     """IConversationStore mock returning empty history."""
     store = AsyncMock()
     store.get_turns.return_value = []
-    store.save_turns.return_value = None
+    store.save_turn.return_value = None
     return store
 
 
 @pytest.fixture
 def mock_cache() -> AsyncMock:
-    """ISemanticCache mock — miss by default."""
+    """ISemanticCache mock — cache miss by default."""
     cache = AsyncMock()
-    cache.lookup.return_value = None   # cache miss
+    cache.lookup.return_value = None
     cache.store.return_value = None
     cache.invalidate.return_value = 0
     return cache
@@ -130,20 +146,21 @@ def mock_messaging() -> AsyncMock:
 @pytest.fixture
 def tb_disease() -> DiseaseConfig:
     return DiseaseConfig(
-        id="tb",
         name="Tuberculosis",
+        short_name="TB",
         enabled=True,
         pinecone_namespace="tb",
-        tavily_domains=["who.int", "cdc.gov"],
-        llm_system_addendum="Focus on TB guidelines for Nigeria.",
+        kb_gcs_path="knowledge-bases/tb/TB_knowledge_base.zip",
+        search_domains=["who.int", "cdc.gov"],
         aliases=["tuberculosis", "consumption"],
         emergency_keywords=["coughing blood", "haemoptysis"],
+        system_prompt_extra="Focus on TB guidelines for Nigeria.",
     )
 
 
 @pytest.fixture
 def disease_registry(tb_disease: DiseaseConfig) -> DiseaseRegistry:
-    return DiseaseRegistry(diseases={"tb": tb_disease})
+    return DiseaseRegistry(configs={"tb": tb_disease})
 
 
 @pytest.fixture
@@ -151,6 +168,7 @@ def inbound_message() -> InboundMessage:
     return InboundMessage(
         message_id="wamid.test001",
         from_number="+2348012345678",
+        to_number="+2348000000000",
         type=MessageType.TEXT,
         text="What are the symptoms of TB?",
         timestamp=1700000000,
@@ -158,17 +176,14 @@ def inbound_message() -> InboundMessage:
 
 
 @pytest.fixture
-def route_result(tb_disease: DiseaseConfig) -> RouteResult:
-    from healthbridgeai.core.models.retrieval import QueryIntent
-
+def route_result() -> RouteResult:
     return RouteResult(
         disease_ids=["tb"],
-        diseases=[tb_disease],
-        intent=QueryIntent.SYMPTOM_QUERY,
+        disease_confidence=0.9,
+        query_intent=QueryIntent.SYMPTOMS,
+        intent_confidence=0.85,
         is_emergency=False,
         is_personal=False,
-        confidence=0.9,
-        raw_text="What are the symptoms of TB?",
     )
 
 
@@ -178,8 +193,7 @@ def retrieval_result() -> RetrievalResult:
         chunks=[_make_chunk()],
         best_score=0.8,
         used_hyde=False,
-        used_web_search=False,
-        query_text="What are the symptoms of TB?",
+        used_web_fallback=False,
     )
 
 
@@ -189,6 +203,6 @@ def llm_response() -> LLMResponse:
         answer="TB symptoms include persistent cough, fever, and night sweats.",
         confidence="high",
         needs_professional=False,
-        caveat="",
+        caveat=None,
         sources_used=[1],
     )
