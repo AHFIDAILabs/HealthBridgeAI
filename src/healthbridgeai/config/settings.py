@@ -13,9 +13,10 @@ class Settings(BaseSettings):
 
     # ── WhatChimp (WhatsApp BSP) ──────────────────────────────────────────────
     WHATCHAMP_API_KEY: str
-    WHATCHAMP_API_URL: str = "https://api.whatchamp.com/v1"
-    WHATCHAMP_PHONE_NUMBER: str          # E.164 format, e.g. +2348012345678
-    WHATCHAMP_WEBHOOK_SECRET: str        # HMAC-SHA256 validation of inbound events
+    WHATCHAMP_API_URL: str = "https://app.whatchimp.com/api/v1"
+    WHATCHAMP_PHONE_NUMBER: str          # E.164 sender number, e.g. +2348012345678
+    WHATCHAMP_PHONE_NUMBER_ID: str       # Meta phone_number_id (required in all API calls)
+    WHATCHAMP_WEBHOOK_SECRET: str = ""   # Optional — Meta X-Hub-Signature-256 app secret
 
     # ── LLM (OpenRouter) ─────────────────────────────────────────────────────
     OPENROUTER_API_KEY: str
