@@ -1,1 +1,96 @@
-﻿# Processor service Dockerfile  [Phase 4]
+# ── HealthBridgeAI Processor Service ────────────────────────────────────────
+# Heavy — BGE-M3 (1024-dim), FlashRank, pydub/ffmpeg audio.
+# BGE-M3 is downloaded at build time so cold-start is fast (<15s target).
+# Target: ~4 GB image (model weights are large), Cloud Run min-instances=1.
+#
+# Build context: repo root (pass --file deploy/Dockerfile.processor from root)
+
+FROM python:3.11-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    # HuggingFace cache inside image — avoids re-downloading at runtime
+    HF_HOME=/app/.cache/huggingface \
+    TRANSFORMERS_OFFLINE=1 \
+    HF_DATASETS_OFFLINE=1
+
+WORKDIR /app
+
+# ── System deps ───────────────────────────────────────────────────────────────
+# ffmpeg: audio conversion to OGG Opus (synthesizer/transcriber)
+# libgomp1: OpenMP required by FlagEmbedding / FAISS
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libgomp1 \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Python deps ───────────────────────────────────────────────────────────────
+COPY pyproject.toml .
+
+RUN pip install --no-cache-dir \
+    "fastapi>=0.115.0" \
+    "uvicorn[standard]>=0.30.0" \
+    "gunicorn>=22.0.0" \
+    "httpx>=0.27.0" \
+    "openai>=1.40.0" \
+    "instructor>=1.4.0" \
+    "FlagEmbedding>=1.2.0" \
+    "pinecone[grpc]>=5.0.0" \
+    "flashrank>=0.2.9" \
+    "tavily-python>=0.3.0" \
+    "langdetect>=1.0.9" \
+    "deep-translator>=1.11.4" \
+    "pypdf>=4.3.0" \
+    "python-docx>=1.1.0" \
+    "google-cloud-storage>=2.17.0" \
+    "google-cloud-firestore>=2.16.0" \
+    "google-cloud-pubsub>=2.21.0" \
+    "google-cloud-secret-manager>=2.20.0" \
+    "gtts>=2.5.0" \
+    "pydub>=0.25.1" \
+    "requests>=2.32.0" \
+    "pydantic>=2.7.0" \
+    "pydantic-settings>=2.3.0" \
+    "pyyaml>=6.0.1" \
+    "structlog>=24.2.0" \
+    "tenacity>=8.3.0"
+
+# ── Pre-download BGE-M3 at build time ────────────────────────────────────────
+# This is the most important step for cold-start performance.
+# HUGGINGFACE_TOKEN is passed as a build-arg (injected by Cloud Build secret).
+ARG HUGGINGFACE_TOKEN=""
+RUN python - <<'PY'
+import os, sys
+token = os.environ.get("HUGGINGFACE_TOKEN") or ""
+kwargs = {"token": token} if token else {}
+from FlagEmbedding import BGEM3FlagModel
+print("Downloading BAAI/bge-m3 weights...", file=sys.stderr)
+BGEM3FlagModel("BAAI/bge-m3", use_fp16=True, **kwargs)
+print("Done.", file=sys.stderr)
+PY
+
+# ── Application source ────────────────────────────────────────────────────────
+COPY src/ src/
+RUN pip install --no-deps -e .
+
+# ── Non-root user ─────────────────────────────────────────────────────────────
+RUN useradd --create-home --shell /bin/bash appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8080
+
+# 1 worker (model is loaded once as a module-level singleton).
+# Longer timeout (60s) to accommodate first-request BGE-M3 warm-up if needed.
+CMD ["gunicorn", \
+     "--bind", "0.0.0.0:8080", \
+     "--worker-class", "uvicorn.workers.UvicornWorker", \
+     "--workers", "1", \
+     "--threads", "2", \
+     "--timeout", "60", \
+     "--log-level", "info", \
+     "healthbridgeai.processor.main:app"]

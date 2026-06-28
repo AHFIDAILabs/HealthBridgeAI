@@ -1,36 +1,60 @@
-# Dockerfile for Lighthouse HealthConnect. Use an official Python runtime as a parent image
-FROM python:3.10-slim
+# ── HealthBridgeAI Webhook Service ──────────────────────────────────────────
+# Lightweight — no BGE-M3. Only validates WhatChimp payloads and publishes
+# to Pub/Sub.  Target: ~300 MB image, <2s cold-start.
+#
+# Build context: repo root (pass --file deploy/Dockerfile from root)
 
-# Set the working directory in the container
+FROM python:3.11-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
 WORKDIR /app
 
-# Copy the requirements file into the container at /app
-COPY requirements.txt .
+# ── System deps ───────────────────────────────────────────────────────────────
+# curl: Cloud Run health checks during rollout
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Add this line to copy env vars if using local builds (file if it exists (for local development))
-#COPY .env .env
-COPY .env* ./
+# ── Python deps ───────────────────────────────────────────────────────────────
+# Copy only the package manifest first (layer cache hit if deps unchanged)
+COPY pyproject.toml .
 
-# Install any needed packages specified in requirements.txt
-# Add ffmpeg for audio processing
-#RUN apt-get update && apt-get install -y ffmpeg
-#RUN pip install --no-cache-dir -r requirements.txt
+# Install the package itself plus its core dependencies.
+# Exclude heavy ML libs that are only needed by the processor.
+RUN pip install --no-cache-dir \
+    "fastapi>=0.115.0" \
+    "uvicorn[standard]>=0.30.0" \
+    "gunicorn>=22.0.0" \
+    "httpx>=0.27.0" \
+    "google-cloud-pubsub>=2.21.0" \
+    "google-cloud-secret-manager>=2.20.0" \
+    "pydantic>=2.7.0" \
+    "pydantic-settings>=2.3.0" \
+    "pyyaml>=6.0.1" \
+    "structlog>=24.2.0" \
+    "tenacity>=8.3.0"
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y ffmpeg git portaudio19-dev && rm -rf /var/lib/apt/lists/*
+# ── Application source ────────────────────────────────────────────────────────
+COPY src/ src/
+RUN pip install --no-deps -e .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# ── Non-root user (Cloud Run security best practice) ─────────────────────────
+RUN useradd --create-home --shell /bin/bash appuser
+USER appuser
 
-# Copy the rest of the application's code into the container at /app
-COPY . .
+EXPOSE 8080
 
-# Make port 8501 available to the world outside this container
-EXPOSE 8501
-
-# Define environment variable
-ENV STREAMLIT_SERVER_PORT 8501
-ENV STREAMLIT_SERVER_HEADLESS true
-
-# Run app.py when the container launches
-CMD ["streamlit", "run", "main.py"]
+# Gunicorn + Uvicorn worker: single process per container (Cloud Run scales
+# horizontally), 2 threads for burst handling within the process.
+CMD ["gunicorn", \
+     "--bind", "0.0.0.0:8080", \
+     "--worker-class", "uvicorn.workers.UvicornWorker", \
+     "--workers", "1", \
+     "--threads", "2", \
+     "--timeout", "30", \
+     "--log-level", "info", \
+     "healthbridgeai.main:app"]

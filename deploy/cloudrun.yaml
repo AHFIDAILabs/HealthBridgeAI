@@ -1,1 +1,179 @@
-﻿# Cloud Run service definitions  [Phase 4]
+# ── HealthBridgeAI Cloud Run Service Definitions ─────────────────────────────
+# These YAML files document service configuration used by cloudbuild.yaml.
+# They are NOT applied directly via `gcloud run services replace` in the build
+# pipeline — the gcloud deploy commands above are the authoritative source.
+# Use these as reference and for manual `gcloud run services replace` runs.
+#
+# Usage (manual):
+#   gcloud run services replace deploy/cloudrun-webhook.yaml  --region us-central1
+#   gcloud run services replace deploy/cloudrun-processor.yaml --region us-central1
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# NOTE: Secret values are injected via Secret Manager — never stored here.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Webhook Service ───────────────────────────────────────────────────────────
+---
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: healthbridge-webhook
+  labels:
+    cloud.googleapis.com/location: us-central1
+  annotations:
+    run.googleapis.com/ingress: all          # public — receives WhatChimp webhooks
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "10"
+        run.googleapis.com/execution-environment: gen2
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 10
+      serviceAccountName: healthbridge-webhook@PROJECT_ID.iam.gserviceaccount.com
+      containers:
+        - image: REGION-docker.pkg.dev/PROJECT_ID/healthbridge/webhook:latest
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          env:
+            - name: GCP_PROJECT_ID
+              value: PROJECT_ID
+            - name: WHATCHAMP_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: whatchamp-api-key
+                  key: latest
+            - name: WHATCHAMP_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: whatchamp-webhook-secret
+                  key: latest
+            - name: WHATCHAMP_API_URL
+              value: "https://api.whatchamp.com/v1"
+            - name: WHATCHAMP_PHONE_NUMBER
+              valueFrom:
+                secretKeyRef:
+                  name: whatchamp-phone-number
+                  key: latest
+            - name: PINECONE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pinecone-api-key
+                  key: latest
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openrouter-api-key
+                  key: latest
+            - name: PUBSUB_TOPIC_INBOUND
+              value: healthbridge-inbound
+          livenessProbe:
+            httpGet:
+              path: /health
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /ready
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+---
+# ── Processor Service ─────────────────────────────────────────────────────────
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: healthbridge-processor
+  labels:
+    cloud.googleapis.com/location: us-central1
+  annotations:
+    run.googleapis.com/ingress: internal    # Pub/Sub push only — no public traffic
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "1"   # keep warm — BGE-M3 load is slow
+        autoscaling.knative.dev/maxScale: "5"
+        run.googleapis.com/execution-environment: gen2
+        run.googleapis.com/cpu-throttling: "false"  # CPU always allocated (model resident)
+    spec:
+      containerConcurrency: 4               # BGE-M3 is CPU-bound; limit parallelism
+      timeoutSeconds: 300
+      serviceAccountName: healthbridge-processor@PROJECT_ID.iam.gserviceaccount.com
+      containers:
+        - image: REGION-docker.pkg.dev/PROJECT_ID/healthbridge/processor:latest
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          env:
+            - name: GCP_PROJECT_ID
+              value: PROJECT_ID
+            - name: WHATCHAMP_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: whatchamp-api-key
+                  key: latest
+            - name: WHATCHAMP_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: whatchamp-webhook-secret
+                  key: latest
+            - name: WHATCHAMP_API_URL
+              value: "https://api.whatchamp.com/v1"
+            - name: WHATCHAMP_PHONE_NUMBER
+              valueFrom:
+                secretKeyRef:
+                  name: whatchamp-phone-number
+                  key: latest
+            - name: PINECONE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pinecone-api-key
+                  key: latest
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openrouter-api-key
+                  key: latest
+            - name: TAVILY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: tavily-api-key
+                  key: latest
+            - name: HUGGINGFACE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: huggingface-token
+                  key: latest
+            - name: YARNGPT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: yarngpt-api-key
+                  key: latest
+            - name: NATLAS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: natlas-api-key
+                  key: latest
+            - name: PUBSUB_TOPIC_INBOUND
+              value: healthbridge-inbound
+            - name: PUBSUB_SUBSCRIPTION_INBOUND
+              value: healthbridge-inbound-sub
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
+            - name: HF_DATASETS_OFFLINE
+              value: "1"
+          livenessProbe:
+            httpGet:
+              path: /health
+            initialDelaySeconds: 30
+            periodSeconds: 60
