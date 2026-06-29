@@ -59,3 +59,129 @@ questions:
       strategy. Contact the nearest government health centre or refer to
       ntblcp.gov.ng for facility locations.
     disease_id: tb
+
+  # ── HIV ─────────────────────────────────────────────────────────────────────
+  - question: "What are the early symptoms of HIV infection?"
+    ground_truth: >
+      Early HIV infection (acute HIV syndrome) may cause flu-like symptoms
+      within 2–4 weeks of exposure: fever, swollen lymph nodes, sore throat,
+      rash, muscle aches, and fatigue. This stage is called acute retroviral
+      syndrome. After this phase, HIV often causes no symptoms for years
+      (the asymptomatic stage) before progressing to AIDS if left untreated.
+    disease_id: hiv
+
+  - question: "How does antiretroviral therapy (ART) work?"
+    ground_truth: >
+      ART uses a combination of at least three drugs from different classes to
+      suppress HIV replication at multiple stages of its lifecycle — including
+      entry (CCR5 antagonists), reverse transcription (NRTIs, NNRTIs),
+      integration (integrase inhibitors), and protease cleavage (protease
+      inhibitors). When viral load becomes undetectable (below 50 copies/mL),
+      ART prevents disease progression and eliminates the risk of sexual
+      transmission (U=U principle).
+    disease_id: hiv
+
+  - question: "What is U=U (Undetectable equals Untransmittable)?"
+    ground_truth: >
+      U=U means a person living with HIV who is on effective ART and maintains
+      an undetectable viral load (below 200 copies/mL) cannot sexually transmit
+      HIV to an HIV-negative partner. This is supported by the PARTNER and
+      HPTN 052 clinical trials. Consistent ART adherence is essential to
+      achieving and sustaining viral suppression.
+    disease_id: hiv
+
+  - question: "Is HIV treatment available for free in Nigeria?"
+    ground_truth: >
+      Yes. Nigeria provides free antiretroviral therapy (ART) through the
+      government HIV program supported by PEPFAR, the Global Fund, and NACA
+      (National Agency for the Control of AIDS). Treatment is available at
+      designated accredited ART health facilities nationwide. For the nearest
+      site, contact NACA or visit naca.gov.ng.
+    disease_id: hiv
+
+  - question: "What is the difference between HIV and AIDS?"
+    ground_truth: >
+      HIV (Human Immunodeficiency Virus) is the virus that causes the
+      infection. AIDS (Acquired Immunodeficiency Syndrome) is the advanced
+      stage of HIV disease, diagnosed when a person's CD4 count falls below
+      200 cells/mm³ or they develop an AIDS-defining illness such as
+      tuberculosis, Pneumocystis pneumonia, or Kaposi's sarcoma. With ART
+      started early, most people with HIV never progress to AIDS.
+    disease_id: hiv
+
+  - question: "How is HIV transmitted?"
+    ground_truth: >
+      HIV is transmitted through contact with specific bodily fluids from a
+      person with detectable HIV: blood, semen, vaginal fluids, rectal fluids,
+      and breast milk. The most common routes are unprotected sexual
+      intercourse, sharing needles or syringes, and mother-to-child
+      transmission during pregnancy, childbirth, or breastfeeding. HIV is NOT
+      transmitted through saliva, sweat, tears, mosquito bites, or sharing
+      food and utensils.
+    disease_id: hiv
+
+  # ── Malaria ──────────────────────────────────────────────────────────────────
+  - question: "What are the symptoms of malaria?"
+    ground_truth: >
+      Malaria typically causes fever, chills, sweating, headache, muscle aches,
+      nausea, and vomiting. Symptoms usually appear 10–15 days after an
+      infective mosquito bite. Fever often occurs in cycles — every 48 hours
+      for Plasmodium falciparum. Severe malaria may cause confusion, seizures,
+      rapid breathing, severe anaemia, and organ failure and is a medical
+      emergency requiring immediate hospital care.
+    disease_id: malaria
+
+  - question: "What is the standard treatment for malaria in Nigeria?"
+    ground_truth: >
+      The first-line treatment for uncomplicated Plasmodium falciparum malaria
+      in Nigeria is Artemisinin-based Combination Therapy (ACT), most commonly
+      artemether-lumefantrine (Coartem). The standard adult course is 6 doses
+      over 3 days. Severe malaria is treated with intravenous artesunate
+      (preferred over quinine). Treatment should always be guided by a
+      confirmed diagnosis using a rapid diagnostic test (RDT) or blood smear.
+    disease_id: malaria
+
+  - question: "How can malaria be prevented?"
+    ground_truth: >
+      Malaria prevention involves: sleeping under Long-Lasting Insecticidal
+      Nets (LLINs); indoor residual spraying (IRS) of homes with insecticide;
+      eliminating stagnant water where mosquitoes breed; using DEET-based
+      repellents; and wearing long-sleeved clothing at dawn and dusk when
+      mosquitoes are most active. For pregnant women, Intermittent Preventive
+      Treatment in pregnancy (IPTp) with sulfadoxine-pyrimethamine is
+      recommended. For children under 5 in high-burden areas, Seasonal
+      Malaria Chemoprevention (SMC) is advised.
+    disease_id: malaria
+
+  - question: "What are the danger signs of severe malaria?"
+    ground_truth: >
+      Danger signs requiring emergency care include: extreme weakness or
+      inability to stand, impaired consciousness or coma (cerebral malaria),
+      repeated convulsions (3 or more in 24 hours), respiratory distress,
+      severe anaemia (very pale palms), yellow eyes (jaundice), inability to
+      drink or breastfeed, and dark or black urine (blackwater fever). Any
+      child or adult with these signs must go to hospital immediately for
+      intravenous artesunate treatment.
+    disease_id: malaria
+
+  - question: "Is malaria treatment free in Nigeria?"
+    ground_truth: >
+      Yes, for vulnerable groups. Nigeria's National Malaria Elimination
+      Programme (NMEP) provides free malaria diagnosis and treatment for
+      pregnant women and children under 5 at government health facilities,
+      funded by the government and partners including the Global Fund. Other
+      patients can access subsidized artemether-lumefantrine at registered
+      drug outlets. Contact the nearest government health centre for free
+      diagnostic testing and treatment referral.
+    disease_id: malaria
+
+  - question: "How does malaria affect pregnant women?"
+    ground_truth: >
+      Malaria in pregnancy is particularly dangerous because it causes severe
+      anaemia in the mother, low birth weight, preterm delivery, and
+      miscarriage. Placental malaria (where parasites accumulate in the
+      placenta) is a major cause of stillbirth and neonatal death. WHO
+      recommends Intermittent Preventive Treatment in pregnancy (IPTp) with
+      sulfadoxine-pyrimethamine (SP) at each antenatal visit from the second
+      trimester, plus sleeping under insecticidal nets throughout pregnancy.
+    disease_id: malaria
